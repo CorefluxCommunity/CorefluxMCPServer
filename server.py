@@ -6,6 +6,7 @@ import argparse
 import requests
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import time
 import sys
 from typing import Dict, Any, Optional
@@ -16,7 +17,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler('coreflux_mcp.log')
+        RotatingFileHandler('coreflux_mcp.log', maxBytes=10485760, backupCount=5)  # 10MB per file, 5 backups
     ]
 )
 logger = logging.getLogger('coreflux_mcp')
@@ -222,6 +223,36 @@ def setup_mqtt(args):
         logger.error(f"Error connecting to MQTT broker: {str(e)}")
         return False
 
+def mqtt_error_description(result_code):
+    """Return a descriptive message for MQTT error codes."""
+    error_codes = {
+        mqtt.MQTT_ERR_AGAIN: "The client is currently busy, try again later",
+        mqtt.MQTT_ERR_NOMEM: "Out of memory condition",
+        mqtt.MQTT_ERR_PROTOCOL: "Protocol error",
+        mqtt.MQTT_ERR_INVAL: "Invalid parameters",
+        mqtt.MQTT_ERR_NO_CONN: "No connection to broker",
+        mqtt.MQTT_ERR_CONN_REFUSED: "Connection refused",
+        mqtt.MQTT_ERR_NOT_FOUND: "Topic or subscription not found",
+        mqtt.MQTT_ERR_CONN_LOST: "Connection lost",
+        mqtt.MQTT_ERR_TLS: "TLS error",
+        mqtt.MQTT_ERR_PAYLOAD_SIZE: "Payload size too large",
+        mqtt.MQTT_ERR_NOT_SUPPORTED: "Feature not supported",
+        mqtt.MQTT_ERR_AUTH: "Authentication failed",
+        mqtt.MQTT_ERR_ACL_DENIED: "Access denied",
+        mqtt.MQTT_ERR_UNKNOWN: "Unknown error",
+        mqtt.MQTT_ERR_ERRNO: "System error"
+    }
+    return error_codes.get(result_code, f"Unknown error code: {result_code}")
+
+def setup_mqtt_with_retry(args, max_retries=5, retry_interval=5):
+    """Set up MQTT with automatic retry."""
+    for attempt in range(max_retries):
+        if setup_mqtt(args):
+            return True
+        logger.warning(f"Connection attempt {attempt+1}/{max_retries} failed, retrying in {retry_interval}s")
+        time.sleep(retry_interval)
+    return False
+
 # Helper function to execute Coreflux commands
 def execute_command(command_string):
     """Execute a Coreflux command by publishing to the command topic."""
@@ -348,11 +379,15 @@ async def remove_action(action_name: str, ctx: Context) -> str:
 @mcp.tool()
 async def run_action(action_name: str, ctx: Context) -> str:
     """Run an action event/function in Coreflux"""
+    correlation_id = str(uuid.uuid4())
     try:
-        return execute_command(f"-runAction {action_name}")
+        logger.info(f"[{correlation_id}] Running action: {action_name}")
+        result = execute_command(f"-runAction {action_name}")
+        logger.info(f"[{correlation_id}] Result: {result}")
+        return result
     except Exception as e:
         error_msg = f"Error running action: {str(e)}"
-        logger.error(error_msg)
+        logger.error(f"[{correlation_id}] {error_msg}")
         return error_msg
 
 @mcp.tool()
@@ -418,6 +453,7 @@ async def check_mqtt_status(ctx: Context) -> str:
     """Check the status of the MQTT connection and related services"""
     try:
         status = {
+            "status": "ok" if mqtt_connection_status["connected"] else "error",
             "mqtt_connected": mqtt_connection_status["connected"],
             "last_error": mqtt_connection_status["last_error"],
             "last_connection_attempt": mqtt_connection_status["last_attempt"],
@@ -428,9 +464,9 @@ async def check_mqtt_status(ctx: Context) -> str:
         
         return json.dumps(status, indent=2)
     except Exception as e:
-        error_msg = f"Error checking MQTT status: {str(e)}"
-        logger.error(error_msg)
-        return error_msg
+        error_msg = {"status": "error", "message": f"Error checking MQTT status: {str(e)}"}
+        logger.error(error_msg["message"])
+        return json.dumps(error_msg)
 
 @mcp.tool()
 def request_lot_code(ctx: Context, query: str, context: str = "") -> str:
@@ -581,7 +617,7 @@ if __name__ == "__main__":
     logger.info(f"Starting Coreflux MCP Server with log level: {args.log_level}")
     
     # Initialize MQTT connection
-    if not setup_mqtt(args):
+    if not setup_mqtt_with_retry(args):
         logger.error("Failed to initialize MQTT connection, continuing with limited functionality")
     
     # Run with standard transport
@@ -590,4 +626,4 @@ if __name__ == "__main__":
         mcp.run()
     except Exception as e:
         logger.critical(f"Error running FastMCP server: {str(e)}")
-        sys.exit(1) 
+        sys.exit(1)
