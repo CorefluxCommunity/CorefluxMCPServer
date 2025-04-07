@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "coreflux": {
+      "command": "python",
+      "args": [
+        "C:/Docs/Coreflux/2-Products/MCP/server.py",
+        "--mqtt-host", "localhost",
+        "--mqtt-port", "1883",
+        "--mqtt-user", "root",
+        "--mqtt-password", "coreflux",
+        "--mqtt-client-id", "claude-coreflux-client"
+      ],
+      "description": "Coreflux MQTT Broker Control",
+      "icon": "🔄",
+      "env": {}
+    }
+  }
+} 

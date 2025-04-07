@@ -1,0 +1,22 @@
+version: '3'
+
+services:
+  coreflux-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - MQTT_BROKER=${MQTT_BROKER:-localhost}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - MQTT_USER=${MQTT_USER:-}
+      - MQTT_PASSWORD=${MQTT_PASSWORD:-}
+      - MQTT_USE_TLS=${MQTT_USE_TLS:-false}
+      - MQTT_CA_CERT=${MQTT_CA_CERT:-}
+      - MQTT_CLIENT_CERT=${MQTT_CLIENT_CERT:-}
+      - MQTT_CLIENT_KEY=${MQTT_CLIENT_KEY:-}
+    volumes:
+      # Optional: Mount certificates if using TLS
+      - ${CERT_PATH:-./certs}:/certs
+    restart: unless-stopped 
