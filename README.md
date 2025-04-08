@@ -10,45 +10,11 @@ This is a Model Context Protocol (MCP) server that connects to a Coreflux MQTT b
 - Includes LOT language documentation as resources
 - Built with the official MCP SDK for seamless Claude integration
 
-## Quick Start
-
-### Using Docker Compose (Recommended)
-
-1. Copy the example environment file:
-   ```bash
-   cp .env.example .env
-   ```
-
-2. Edit the `.env` file with your MQTT broker details:
-   ```
-   MQTT_BROKER=your-broker-address
-   MQTT_PORT=1883
-   MQTT_USER=your-username
-   MQTT_PASSWORD=your-password
-   ```
-
-3. Run with docker-compose:
-   ```bash
-   docker-compose up -d
-   ```
-
-### Using Python (Local Development)
-
-1. Install the MCP SDK and required dependencies:
-   ```bash
-   pip install "mcp[cli]" paho-mqtt
-   ```
-
-2. Run the server with environment variables:
-   ```bash
-   MQTT_BROKER=your-broker-address MQTT_PORT=1883 python server.py
-   ```
-
 ## Connecting Claude to the MCP Server
 
-### Recommended Approach: Using Claude Desktop Config
+### Using Claude Desktop Config
 
-1. Create or edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS/Linux) or equivalent Windows path
+1. Create or edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS/Linux) or `%USERPROFILE%\AppData\Roaming\Claude\claude_desktop_config.json` (Windows)
 2. Add the following configuration (adjust the paths accordingly):
    ```json
    {
@@ -56,42 +22,37 @@ This is a Model Context Protocol (MCP) server that connects to a Coreflux MQTT b
        "coreflux": {
          "command": "python",
          "args": [
-           "/ABSOLUTE/PATH/TO/server.py"
+           "/PATH/TO/server.py",
+           "--mqtt-host", "localhost", 
+           "--mqtt-port", "1883",
+           "--mqtt-user", "root",
+           "--mqtt-password", "coreflux",
+           "--mqtt-client-id", "claude-coreflux-client"
          ],
          "description": "Coreflux MQTT Broker Control",
          "icon": "🔄",
-         "env": {
-           "MQTT_BROKER": "localhost",
-           "MQTT_PORT": "1883",
-           "MQTT_USER": "",
-           "MQTT_PASSWORD": ""
-         }
+         "env": {}
        }
      }
    }
    ```
 3. Restart Claude Desktop
 
-### Alternative: Using the CLI
+### Command-Line Arguments
 
-If you're running the server directly:
+The server accepts the following command-line arguments:
 
-```bash
-mcp server add coreflux --command python --args "/ABSOLUTE/PATH/TO/server.py"
-```
-
-## Environment Variables
-
-| Variable | Description | Default |
+| Argument | Description | Default |
 |----------|-------------|---------|
-| `MQTT_BROKER` | MQTT broker address | localhost |
-| `MQTT_PORT` | MQTT broker port | 1883 |
-| `MQTT_USER` | MQTT username | - |
-| `MQTT_PASSWORD` | MQTT password | - |
-| `MQTT_USE_TLS` | Enable TLS for MQTT connection | false |
-| `MQTT_CA_CERT` | Path to CA certificate file | - |
-| `MQTT_CLIENT_CERT` | Path to client certificate file | - |
-| `MQTT_CLIENT_KEY` | Path to client key file | - |
+| `--mqtt-host` | MQTT broker address | localhost |
+| `--mqtt-port` | MQTT broker port | 1883 |
+| `--mqtt-user` | MQTT username | - |
+| `--mqtt-password` | MQTT password | - |
+| `--mqtt-client-id` | MQTT client ID | claude-mcp-client |
+| `--mqtt-use-tls` | Enable TLS for MQTT connection | false |
+| `--mqtt-ca-cert` | Path to CA certificate file | - |
+| `--mqtt-client-cert` | Path to client certificate file | - |
+| `--mqtt-client-key` | Path to client key file | - |
 
 ## Available Tools
 
@@ -110,33 +71,28 @@ The server provides tools for common Coreflux commands:
 - `remove_all_actions`: Remove all actions
 - `remove_all_routes`: Remove all routes
 - `list_discovered_actions`: List all discovered Coreflux actions
-
-## LOT Language Resources
-
-The server includes documentation on the LOT language:
-
-- `lot://documentation/models`: Guide to LOT models
-- `lot://documentation/rules`: Guide to LOT rules
-- `lot://documentation/actions`: Guide to LOT actions
+- `request_lot_code`: Generate LOT code based on natural language prompts
 
 ## Debugging and Troubleshooting
 
 If you encounter issues:
 
-1. Verify your MQTT broker credentials in your environment variables
+1. Verify your MQTT broker credentials in your Claude configuration
 2. Ensure the broker is accessible 
 3. Check Claude Desktop logs:
    ```bash
    # Check Claude's logs for errors (macOS/Linux)
    tail -n 20 -f ~/Library/Logs/Claude/mcp*.log
+   # Windows PowerShell
+   Get-Content -Path "$env:USERPROFILE\AppData\Roaming\Claude\Logs\mcp*.log" -Tail 20 -Wait
    ```
-4. Run the server in debug mode:
+4. Run the server with debug logging:
    ```bash
    # Direct execution with debug logging
-   python server.py --debug
+   python server.py --mqtt-host localhost --mqtt-port 1883 --debug
    ```
 
 ## References
 
 - [MCP Quickstart for Server Developers](https://modelcontextprotocol.io/quickstart/server)
-- [MCP Official Documentation](https://modelcontextprotocol.io/) 
+- [MCP Official Documentation](https://modelcontextprotocol.io/)
