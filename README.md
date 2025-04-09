@@ -9,6 +9,18 @@ This is a Model Context Protocol (MCP) server that connects to a Coreflux MQTT b
 - Discovers and lists available actions
 - Includes LOT language documentation as resources
 - Built with the official MCP SDK for seamless Claude integration
+- Interactive setup assistant for first-time configuration
+
+## Setup Assistant
+
+The server includes an interactive setup assistant that runs automatically on first launch. This assistant helps you:
+
+- Create or update the `.env` file with your configuration
+- Configure MQTT broker settings (host, port, credentials)
+- Set up TLS configuration if needed
+- Configure logging options
+
+The setup assistant can be disabled by setting `ENABLE_SETUP_ASSISTANT = False` in the `server.py` file.
 
 ## Connecting Claude to the MCP Server
 
@@ -40,7 +52,7 @@ This is a Model Context Protocol (MCP) server that connects to a Coreflux MQTT b
 
 ### Command-Line Arguments
 
-The server accepts the following command-line arguments:
+The server accepts the following command-line arguments. These settings can also be configured via the `.env` file using the setup assistant:
 
 | Argument | Description | Default |
 |----------|-------------|---------|
@@ -53,6 +65,7 @@ The server accepts the following command-line arguments:
 | `--mqtt-ca-cert` | Path to CA certificate file | - |
 | `--mqtt-client-cert` | Path to client certificate file | - |
 | `--mqtt-client-key` | Path to client key file | - |
+| `--log-level` | Logging level (DEBUG/INFO/WARNING/ERROR/CRITICAL) | INFO |
 
 ## Available Tools
 
@@ -79,17 +92,18 @@ If you encounter issues:
 
 1. Verify your MQTT broker credentials in your Claude configuration
 2. Ensure the broker is accessible 
-3. Check Claude Desktop logs:
+3. Run the server again with the setup assistant to verify or update your configuration
+4. Check Claude Desktop logs:
    ```bash
    # Check Claude's logs for errors (macOS/Linux)
    tail -n 20 -f ~/Library/Logs/Claude/mcp*.log
    # Windows PowerShell
    Get-Content -Path "$env:USERPROFILE\AppData\Roaming\Claude\Logs\mcp*.log" -Tail 20 -Wait
    ```
-4. Run the server with debug logging:
+5. Run the server with debug logging:
    ```bash
    # Direct execution with debug logging
-   python server.py --mqtt-host localhost --mqtt-port 1883 --debug
+   python server.py --mqtt-host localhost --mqtt-port 1883 --log-level DEBUG
    ```
 
 ## References
