@@ -490,9 +490,38 @@ def request_lot_code(ctx: Context, query: str, context: str = "") -> str:
         response = requests.post(api_url, json=payload, timeout=30)
         if response.status_code == 200:
             try:
+                # Get the JSON response
                 result = response.json()
-                logger.info("LOT code generation successful")
-                return json.dumps(result, indent=2)
+                
+                # For formatted output in the log
+                formatted_json = json.dumps(result, indent=2)
+                logger.info(f"LOT code generation successful: {formatted_json[:200]}...")
+                
+                # Return the result directly as a string, with proper formatting
+                # Use a structured format for better readability
+                output = []
+                
+                if "title" in result:
+                    output.append(f"# {result['title']}")
+                    output.append("")
+                
+                if "description" in result:
+                    output.append(result['description'])
+                    output.append("")
+                
+                if "lot_code" in result:
+                    output.append("```")
+                    output.append(result['lot_code'])
+                    output.append("```")
+                    output.append("")
+                
+                if "explanation" in result:
+                    output.append("## Explanation")
+                    output.append(result['explanation'])
+                
+                # Join all parts with newlines and return
+                return "\n".join(output)
+                
             except json.JSONDecodeError as e:
                 error_msg = f"Failed to parse API response: {str(e)}"
                 logger.error(error_msg)
