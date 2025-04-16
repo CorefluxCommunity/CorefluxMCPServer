@@ -9,18 +9,30 @@ This is a Model Context Protocol (MCP) server that connects to a Coreflux MQTT b
 - Discovers and lists available actions
 - Includes LOT language documentation as resources
 - Built with the official MCP SDK for seamless Claude integration
-- Interactive setup assistant for first-time configuration
+- Standalone setup assistant for configuration
 
 ## Setup Assistant
 
-The server includes an interactive setup assistant that runs automatically on first launch. This assistant helps you:
+The server includes a standalone setup assistant that can be run separately from the main server. Run the setup assistant when:
+
+- You need to create an initial configuration (.env file)
+- You want to update your existing configuration
+- You're experiencing connection issues and need to reconfigure
+
+To run the setup assistant:
+
+```bash
+python setup_assistant.py
+```
+
+The setup assistant helps you:
 
 - Create or update the `.env` file with your configuration
 - Configure MQTT broker settings (host, port, credentials)
 - Set up TLS configuration if needed
 - Configure logging options
 
-The setup assistant can be disabled by setting `ENABLE_SETUP_ASSISTANT = False` in the `server.py` file.
+After configuration is complete, you can run the server normally.
 
 ## Connecting Claude to the MCP Server
 
@@ -92,7 +104,10 @@ If you encounter issues:
 
 1. Verify your MQTT broker credentials in your Claude configuration
 2. Ensure the broker is accessible 
-3. Run the server again with the setup assistant to verify or update your configuration
+3. Run the setup assistant to verify or update your configuration:
+   ```bash
+   python setup_assistant.py
+   ```
 4. Check Claude Desktop logs:
    ```bash
    # Check Claude's logs for errors (macOS/Linux)

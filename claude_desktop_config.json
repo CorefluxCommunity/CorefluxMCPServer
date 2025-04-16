@@ -3,7 +3,7 @@
     "coreflux": {
       "command": "python",
       "args": [
-        "C:/PATH/TO/server.pyserver.py",
+        "C:/PATH/TO/server.py",
         "--mqtt-host", "localhost",
         "--mqtt-port", "1883",
         "--mqtt-user", "root",

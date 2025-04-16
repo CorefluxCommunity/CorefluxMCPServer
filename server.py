@@ -11,9 +11,6 @@ import time
 from datetime import datetime
 from dotenv import load_dotenv
 
-# Flag to enable/disable setup assistant
-ENABLE_SETUP_ASSISTANT = True
-
 # Load environment variables from .env file if it exists
 load_dotenv()
 
@@ -101,7 +98,7 @@ def on_connect(client, userdata, flags, rc, properties=None):
         connection_status["last_error"] = result_code_map.get(rc, f"Unknown error code: {rc}")
         logger.error(f"Failed to connect to MQTT broker: {connection_status['last_error']}")
 
-def on_disconnect(client, userdata, rc, properties=None):
+def on_disconnect(client, userdata, rc, properties=None, reason_code=0):
     connection_status["connected"] = False
     if rc == 0:
         logger.info("Disconnected from MQTT broker gracefully")
@@ -118,7 +115,72 @@ def on_message(client, userdata, msg):
         if len(topic_parts) >= 4 and topic_parts[-1] == "Description":
             action_name = topic_parts[-2]
             try:
-                description = msg.payload.decode('utf-8')
+                payload_raw = msg.payload
+                # Debug the raw message
+                logger.debug(f"Raw message received: {repr(payload_raw)}")
+                
+                # Check for common JSON formatting issues
+                payload_str = payload_raw.decode('utf-8').strip()
+                
+                # Handle multiple JSON objects case (position 4 error often occurs when multiple JSONs are concatenated)
+                if payload_str.count('{') > 1 or payload_str.count('}') > 1:
+                    logger.warning(f"Multiple JSON objects detected: {payload_str}")
+                    # Try to extract just the first valid JSON object
+                    if '{' in payload_str and '}' in payload_str:
+                        first_open = payload_str.find('{')
+                        first_close = payload_str.find('}', first_open)
+                        if first_close > first_open:
+                            payload_str = payload_str[first_open:first_close+1]
+                            logger.info(f"Extracted first JSON object: {payload_str}")
+                
+                # Try to parse the JSON with error handling
+                try:
+                    # If payload appears to be JSON, parse it
+                    if payload_str.startswith('{') and payload_str.endswith('}'):
+                        description_obj = json.loads(payload_str)
+                        # Extract description from JSON if needed
+                        if isinstance(description_obj, dict) and 'description' in description_obj:
+                            description = description_obj['description']
+                        else:
+                            description = payload_str
+                    else:
+                        description = payload_str
+                except json.JSONDecodeError as e:
+                    logger.warning(f"JSON parse error: {str(e)}")
+                    # Handle the common "Extra data" error (position 4 issue)
+                    if "Extra data" in str(e) or "Unexpected non-whitespace character" in str(e):
+                        # Try to extract just the valid JSON part by finding matching brackets
+                        try:
+                            # Find the first valid JSON object
+                            stack = []
+                            valid_end = -1
+                            for i, char in enumerate(payload_str):
+                                if char == '{':
+                                    stack.append(i)
+                                elif char == '}' and stack:
+                                    start = stack.pop()
+                                    if not stack:  # If this closes the outermost object
+                                        valid_end = i
+                                        break
+                            
+                            if valid_end > 0:
+                                valid_json = payload_str[:valid_end+1]
+                                logger.info(f"Extracted valid JSON: {valid_json}")
+                                description_obj = json.loads(valid_json)
+                                if isinstance(description_obj, dict) and 'description' in description_obj:
+                                    description = description_obj['description']
+                                else:
+                                    description = valid_json
+                            else:
+                                # Just use it as a string if we can't parse it as JSON
+                                description = payload_str
+                        except Exception as inner_e:
+                            logger.error(f"Error extracting valid JSON: {str(inner_e)}")
+                            description = payload_str
+                    else:
+                        # Not a JSON error we specifically handle, use as string
+                        description = payload_str
+
             except UnicodeDecodeError as e:
                 logger.error(f"Failed to decode message payload: {str(e)}")
                 return
@@ -185,7 +247,7 @@ def setup_mqtt(args):
     
     # Use protocol version 5 (MQTT v5) with the newer callback API and unique client ID
     try:
-        mqtt_client = mqtt.Client(client_id=args.mqtt_client_id, protocol=mqtt.MQTTv5)
+        mqtt_client = mqtt.Client(client_id=args.mqtt_client_id, protocol=mqtt.MQTTv5, callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
         
         # Set up authentication if provided
         if args.mqtt_user and args.mqtt_password:
@@ -243,7 +305,7 @@ def setup_mqtt(args):
             logger.warning(f"MQTT connection not confirmed after {max_wait} seconds, but loop started")
             return True
             
-        except mqtt.MQTTException as e:
+        except Exception as e:
             logger.error(f"MQTT protocol error: {str(e)}")
             connection_status["last_error"] = str(e)
             return False
@@ -282,13 +344,9 @@ def execute_command(command_string):
             error_msg = f"Failed to publish command: {mqtt.error_string(result.rc)}"
             logger.error(error_msg)
             return f"ERROR: {error_msg}"
-    except mqtt.MQTTException as e:
+    except Exception as e:
         error_msg = f"MQTT protocol error while executing command: {str(e)}"
         logger.error(error_msg)
-        return f"ERROR: {error_msg}"
-    except Exception as e:
-        error_msg = f"Error executing command: {str(e)}"
-        logger.error(error_msg, exc_info=True)
         return f"ERROR: {error_msg}"
 
 # Tools for Coreflux commands
@@ -463,14 +521,17 @@ async def get_connection_status(ctx: Context) -> str:
 def request_lot_code(ctx: Context, query: str, context: str = "") -> str:
     """
     Request Lot code generation or Lot Knowledge (models, actions, rules) based on a natural language prompt.
-    So you are able to create models , actions and rules before adding them. Any 
-    logic that you need to implement in the Coreflux MQTT broker you should ask in this tool first. 
+    So you are able to create models, actions and rules before adding them. Any 
+    logic that you need to implement in the Coreflux MQTT broker you should ask in this tool first.
+    
+    IMPORTANT: Format all JSON properly, without escape characters that may be misinterpreted or nested quotes. Instead of nested quotes, use something that will not break the json or json-rpc.
+    
     Args:
         query: describe what the user wants in a structured way
         context: Additional context or specific requirements (optional)
     
     Returns:
-        str: The reply with documentation and LOT code with the potential actions, models, rules  or routes.
+        str: The reply with documentation and LOT code with the potential actions, models, rules or routes.
     """
     if not query or not query.strip():
         error_msg = "Query cannot be empty"
@@ -479,52 +540,122 @@ def request_lot_code(ctx: Context, query: str, context: str = "") -> str:
         
     api_url = "https://anselmo.coreflux.org/webhook/chat_lot_beta"
     
+    # Sanitize input to prevent JSON formatting issues
+    # Remove any control characters that might cause JSON parsing problems
+    def sanitize_for_json(text):
+        if not text:
+            return ""
+        # Replace problematic control characters and ensure valid UTF-8
+        for char in ['\b', '\f', '\n', '\r', '\t']:
+            text = text.replace(char, ' ')
+        # Ensure we don't have any unescaped quotes that could break JSON
+        text = text.replace('\\', '\\\\').replace('"', '\\"')
+        return text
+    
+    # Create a proper JSON-RPC compatible payload
+    sanitized_query = sanitize_for_json(query)
+    sanitized_context = sanitize_for_json(context) if context else ""
+    
+    # Create JSON-RPC structured payload with ID and properly formatted params
     payload = {
-        "query": query,
-        "context": context
+        "jsonrpc": "2.0",
+        "id": str(uuid.uuid4()),
+        "method": "lot_code_generation",
+        "params": {
+            "query": sanitized_query,
+            "context": sanitized_context
+        }
     }
     
-    logger.info(f"Requesting LOT code generation with query: {query[:50]}..." if len(query) > 50 else f"Requesting LOT code generation with query: {query}")
+    # Log the actual data being sent (for debugging)
+    logger.debug(f"Sending JSON-RPC request: {json.dumps(payload, ensure_ascii=False)}")
+    logger.info(f"Requesting LOT code generation with query: {sanitized_query[:50]}..." if len(sanitized_query) > 50 else f"Requesting LOT code generation with query: {sanitized_query}")
     
     try:
-        response = requests.post(api_url, json=payload, timeout=30)
+        # Set proper Content-Type header to ensure correct JSON interpretation
+        headers = {"Content-Type": "application/json"}
+        response = requests.post(api_url, json=payload, headers=headers, timeout=30)
+        
+        # Debug the raw response
+        logger.debug(f"Raw API response status: {response.status_code}")
+        logger.debug(f"Raw API response content: {response.text[:200]}..." if len(response.text) > 200 else response.text)
+        
         if response.status_code == 200:
             try:
-                # Get the JSON response
-                result = response.json()
+                # Parse the response with strict JSON validation
+                result = json.loads(response.text.strip())
                 
-                # For formatted output in the log
-                formatted_json = json.dumps(result, indent=2)
-                logger.info(f"LOT code generation successful: {formatted_json[:200]}...")
-                
-                # Return the result directly as a string, with proper formatting
-                # Use a structured format for better readability
-                output = []
-                
-                if "title" in result:
-                    output.append(f"# {result['title']}")
-                    output.append("")
-                
-                if "description" in result:
-                    output.append(result['description'])
-                    output.append("")
-                
-                if "lot_code" in result:
-                    output.append("```")
-                    output.append(result['lot_code'])
-                    output.append("```")
-                    output.append("")
-                
-                if "explanation" in result:
-                    output.append("## Explanation")
-                    output.append(result['explanation'])
-                
-                # Join all parts with newlines and return
-                return "\n".join(output)
-                
+                # Check if we got a valid JSON-RPC response
+                if isinstance(result, dict):
+                    # Handle both direct result and JSON-RPC formatted responses
+                    if "result" in result:
+                        # Extract from JSON-RPC result field
+                        result = result["result"]
+                    
+                    # For formatted output in the log
+                    formatted_json = result.get("raw output", "No output found.")
+                    logger.info(f"LOT code generation successful: {formatted_json[:200]}...")
+                    
+                    # Return the result directly as a string, with proper formatting
+                    # Use a structured format for better readability
+                    output = []
+                    
+                    if "title" in result:
+                        output.append(f"# {result['title']}")
+                        output.append("")
+                    
+                    if "description" in result:
+                        output.append(result['description'])
+                        output.append("")
+                    
+                    if "lot_code" in result:
+                        output.append("```")
+                        output.append(result['lot_code'])
+                        output.append("```")
+                        output.append("")
+                    
+                    if "explanation" in result:
+                        output.append("## Explanation")
+                        output.append(result['explanation'])
+                    
+                    # Join all parts with newlines and return
+                    return "\n".join(output)
+                else:
+                    error_msg = "Invalid response format: not a JSON object"
+                    logger.error(error_msg)
+                    return f"Error: {error_msg}"
+                    
             except json.JSONDecodeError as e:
                 error_msg = f"Failed to parse API response: {str(e)}"
                 logger.error(error_msg)
+                logger.debug(f"JSON parse error details: {str(e)}, line: {e.lineno}, col: {e.colno}, pos: {e.pos}")
+                
+                # Try to recover data from partial JSON if possible
+                try:
+                    if "{" in response.text and "}" in response.text:
+                        # Find first complete JSON object
+                        start = response.text.find("{")
+                        stack = []
+                        end = -1
+                        
+                        for i, char in enumerate(response.text[start:]):
+                            if char == '{':
+                                stack.append(i)
+                            elif char == '}' and stack:
+                                stack.pop()
+                                if not stack:
+                                    end = start + i + 1
+                                    break
+                        
+                        if end > start:
+                            valid_json = response.text[start:end]
+                            logger.info(f"Attempting to parse recovered JSON: {valid_json[:50]}...")
+                            recovered = json.loads(valid_json)
+                            return f"Recovered partial response: {str(recovered)[:200]}..."
+                except Exception:
+                    # If recovery fails, just return the original error
+                    pass
+                    
                 return f"Error: {error_msg}"
         else:
             error_msg = f"API request failed with status {response.status_code}"
@@ -691,117 +822,9 @@ async def check_broker_health(ctx: Context) -> str:
         logger.warning("MQTT broker connection appears to be down, attempting to reconnect")
         return await reconnect_mqtt(ctx)
 
-def run_setup_assistant():
-    """
-    Interactive setup assistant for first-time configuration.
-    Creates or updates the .env file with user-provided values.
-    """
-    print("\n" + "="*50)
-    print("Coreflux MCP Server - Setup Assistant")
-    print("="*50)
-    print("This assistant will help you configure the server by creating or updating the .env file.")
-    print("Press Enter to accept the default value shown in brackets [default].")
-    print("-"*50)
-    
-    # Check if .env file exists
-    env_file_exists = os.path.isfile(".env")
-    env_vars = {}
-    
-    if env_file_exists:
-        print("Existing .env file found. Current values will be shown as defaults.")
-        # Read existing values
-        with open(".env", "r") as f:
-            for line in f:
-                if line.strip() and not line.strip().startswith("#"):
-                    try:
-                        key, value = line.strip().split("=", 1)
-                        env_vars[key] = value
-                    except ValueError:
-                        # Skip lines that don't have a key=value format
-                        pass
-    
-    # MQTT Broker Configuration
-    mqtt_broker = input(f"MQTT Broker Host [{ env_vars.get('MQTT_BROKER', 'localhost') }]: ").strip()
-    env_vars["MQTT_BROKER"] = mqtt_broker if mqtt_broker else env_vars.get("MQTT_BROKER", "localhost")
-    
-    mqtt_port = input(f"MQTT Broker Port [{ env_vars.get('MQTT_PORT', '1883') }]: ").strip()
-    env_vars["MQTT_PORT"] = mqtt_port if mqtt_port else env_vars.get("MQTT_PORT", "1883")
-    
-    mqtt_user = input(f"MQTT Username [{ env_vars.get('MQTT_USER', 'root') }]: ").strip()
-    env_vars["MQTT_USER"] = mqtt_user if mqtt_user else env_vars.get("MQTT_USER", "root")
-    
-    mqtt_password = input(f"MQTT Password [{ env_vars.get('MQTT_PASSWORD', 'coreflux') }]: ").strip()
-    env_vars["MQTT_PASSWORD"] = mqtt_password if mqtt_password else env_vars.get("MQTT_PASSWORD", "coreflux")
-    
-    mqtt_client_id = input(f"MQTT Client ID [{ env_vars.get('MQTT_CLIENT_ID', f'coreflux-mcp-{uuid.uuid4().hex[:8]}') }]: ").strip()
-    env_vars["MQTT_CLIENT_ID"] = mqtt_client_id if mqtt_client_id else env_vars.get("MQTT_CLIENT_ID", f"coreflux-mcp-{uuid.uuid4().hex[:8]}")
-    
-    # TLS Configuration
-    use_tls = input(f"Use TLS for MQTT connection (true/false) [{ env_vars.get('MQTT_USE_TLS', 'false') }]: ").strip().lower()
-    if use_tls in ["true", "false"]:
-        env_vars["MQTT_USE_TLS"] = use_tls
-    else:
-        env_vars["MQTT_USE_TLS"] = env_vars.get("MQTT_USE_TLS", "false")
-    
-    if env_vars["MQTT_USE_TLS"] == "true":
-        ca_cert = input(f"Path to CA Certificate [{ env_vars.get('MQTT_CA_CERT', '') }]: ").strip()
-        env_vars["MQTT_CA_CERT"] = ca_cert if ca_cert else env_vars.get("MQTT_CA_CERT", "")
-        
-        client_cert = input(f"Path to Client Certificate [{ env_vars.get('MQTT_CLIENT_CERT', '') }]: ").strip()
-        env_vars["MQTT_CLIENT_CERT"] = client_cert if client_cert else env_vars.get("MQTT_CLIENT_CERT", "")
-        
-        client_key = input(f"Path to Client Key [{ env_vars.get('MQTT_CLIENT_KEY', '') }]: ").strip()
-        env_vars["MQTT_CLIENT_KEY"] = client_key if client_key else env_vars.get("MQTT_CLIENT_KEY", "")
-    
-    # Logging Configuration
-    log_level = input(f"Log Level (DEBUG/INFO/WARNING/ERROR/CRITICAL) [{ env_vars.get('LOG_LEVEL', 'INFO') }]: ").strip().upper()
-    valid_log_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
-    if log_level in valid_log_levels:
-        env_vars["LOG_LEVEL"] = log_level
-    else:
-        env_vars["LOG_LEVEL"] = env_vars.get("LOG_LEVEL", "INFO")
-    
-    # Write to .env file
-    with open(".env", "w") as f:
-        f.write("# Coreflux MCP Server Configuration\n")
-        f.write("# Generated by Setup Assistant\n")
-        f.write(f"# {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-        
-        # MQTT Configuration
-        f.write("# MQTT Broker Configuration\n")
-        f.write(f"MQTT_BROKER={env_vars['MQTT_BROKER']}\n")
-        f.write(f"MQTT_PORT={env_vars['MQTT_PORT']}\n")
-        f.write(f"MQTT_USER={env_vars['MQTT_USER']}\n")
-        f.write(f"MQTT_PASSWORD={env_vars['MQTT_PASSWORD']}\n")
-        f.write(f"MQTT_CLIENT_ID={env_vars['MQTT_CLIENT_ID']}\n\n")
-        
-        # TLS Configuration
-        f.write("# TLS Configuration\n")
-        f.write(f"MQTT_USE_TLS={env_vars['MQTT_USE_TLS']}\n")
-        if env_vars["MQTT_USE_TLS"] == "true":
-            f.write(f"MQTT_CA_CERT={env_vars['MQTT_CA_CERT']}\n")
-            f.write(f"MQTT_CLIENT_CERT={env_vars['MQTT_CLIENT_CERT']}\n")
-            f.write(f"MQTT_CLIENT_KEY={env_vars['MQTT_CLIENT_KEY']}\n\n")
-        
-        # Logging Configuration
-        f.write("# Logging Configuration\n")
-        f.write(f"LOG_LEVEL={env_vars['LOG_LEVEL']}\n")
-    
-    print("\nConfiguration saved to .env file successfully!")
-    print("-"*50)
-    print("You can disable this setup assistant by setting ENABLE_SETUP_ASSISTANT = False in the server.py file.")
-    print("="*50 + "\n")
-    
-    # Reload environment variables
-    load_dotenv(override=True)
-
 if __name__ == "__main__":
     try:
         logger.info("Starting Coreflux MCP Server")
-        
-        # Run setup assistant if enabled
-        if ENABLE_SETUP_ASSISTANT:
-            run_setup_assistant()
         
         # Parse command-line arguments
         args = parse_args()
@@ -809,6 +832,7 @@ if __name__ == "__main__":
         # Initialize MQTT connection
         if not setup_mqtt(args):
             logger.error("Failed to initialize MQTT connection. Exiting.")
+            print("Failed to initialize MQTT connection. Run setup_assistant.py to configure your connection.")
             sys.exit(1)
         
         # Log startup information
@@ -829,4 +853,4 @@ if __name__ == "__main__":
         if mqtt_client:
             mqtt_client.disconnect()
             mqtt_client.loop_stop()
-        sys.exit(1) 
+        sys.exit(1)
