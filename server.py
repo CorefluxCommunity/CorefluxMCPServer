@@ -69,6 +69,8 @@ connection_status = {
     "last_error": None
 }
 server_start_time = datetime.now()
+mqtt_subscriptions = {}  # Track active subscriptions
+mqtt_message_buffer = {}  # Buffer to store received messages
 
 # MQTT connection and message handling
 def on_connect(client, userdata, flags, rc, properties=None):
@@ -110,6 +112,30 @@ def on_disconnect(client, userdata, rc, properties=None, reason_code=0):
 
 def on_message(client, userdata, msg):
     try:
+        # Store message in buffer
+        topic = msg.topic
+        try:
+            payload = msg.payload.decode('utf-8')
+        except UnicodeDecodeError:
+            payload = str(msg.payload)
+        
+        # Initialize topic in buffer if it doesn't exist
+        if topic not in mqtt_message_buffer:
+            mqtt_message_buffer[topic] = []
+        
+        # Add message with timestamp
+        mqtt_message_buffer[topic].append({
+            "payload": payload,
+            "timestamp": time.time(),
+            "qos": msg.qos,
+            "retain": msg.retain
+        })
+        
+        # Limit buffer size (keep last 100 messages per topic)
+        if len(mqtt_message_buffer[topic]) > 100:
+            mqtt_message_buffer[topic] = mqtt_message_buffer[topic][-100:]
+        
+        # Continue with the original logic for extracting action descriptions
         # Extract action name from topic
         topic_parts = msg.topic.split('/')
         if len(topic_parts) >= 4 and topic_parts[-1] == "Description":
@@ -524,8 +550,8 @@ def request_lot_code(ctx: Context, query: str, context: str = "") -> str:
     So you are able to create models, actions and rules before adding them. Any 
     logic that you need to implement in the Coreflux MQTT broker you should ask in this tool first.
     
-    IMPORTANT: Format all JSON properly, without escape characters that may be misinterpreted or nested quotes. Instead of nested quotes, use something that will not break the json or json-rpc.
-    
+    IMPORTANT: Format all JSON properly, going directly on the first try to simple quoted strings. This is fundamental for the success of the execution!
+
     Args:
         query: describe what the user wants in a structured way
         context: Additional context or specific requirements (optional)
@@ -821,6 +847,283 @@ async def check_broker_health(ctx: Context) -> str:
     else:
         logger.warning("MQTT broker connection appears to be down, attempting to reconnect")
         return await reconnect_mqtt(ctx)
+
+@mcp.tool()
+async def mqtt_connect(broker: str, port: int = 1883, username: str = None, password: str = None, 
+                      client_id: str = None, use_tls: bool = False, ctx: Context = None) -> str:
+    """
+    Connect to a specific MQTT broker
+    
+    Args:
+        broker: The MQTT broker hostname or IP address
+        port: The MQTT broker port (default: 1883)
+        username: Optional username for authentication
+        password: Optional password for authentication
+        client_id: Optional client ID (default: auto-generated)
+        use_tls: Whether to use TLS encryption (default: False)
+    """
+    global mqtt_client
+    
+    # Generate client ID if not provided
+    if not client_id:
+        client_id = f"coreflux-mcp-{uuid.uuid4().hex[:8]}"
+    
+    # Log the attempt
+    logger.info(f"Attempting to connect to MQTT broker at {broker}:{port} with client ID: {client_id}")
+    
+    try:
+        # Create new client
+        mqtt_client = mqtt.Client(client_id=client_id, protocol=mqtt.MQTTv5, 
+                                 callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
+        
+        # Set up authentication if provided
+        if username and password:
+            mqtt_client.username_pw_set(username, password)
+            logger.debug(f"Using MQTT authentication with username: {username}")
+        
+        # Configure TLS if enabled
+        if use_tls:
+            mqtt_client.tls_set()
+            logger.info("TLS configuration enabled for MQTT connection")
+        
+        # Set callbacks
+        mqtt_client.on_connect = on_connect
+        mqtt_client.on_message = on_message
+        mqtt_client.on_disconnect = on_disconnect
+        
+        # Connect to broker
+        connection_status["last_connection_attempt"] = datetime.now()
+        mqtt_client.connect(broker, port, 60)
+        mqtt_client.loop_start()
+        
+        # Wait briefly to check connection status
+        max_wait = 3  # seconds
+        for _ in range(max_wait * 2):
+            if connection_status["connected"]:
+                logger.info("MQTT client connected successfully")
+                return f"Successfully connected to MQTT broker at {broker}:{port}"
+            time.sleep(0.5)
+        
+        # If we get here, we didn't connect within the timeout
+        logger.warning(f"MQTT connection not confirmed after {max_wait} seconds, but loop started")
+        return f"Connection attempt completed, but status unclear. Use get_connection_status to verify."
+        
+    except Exception as e:
+        error_msg = f"Failed to connect to MQTT broker: {str(e)}"
+        logger.error(error_msg)
+        connection_status["last_error"] = str(e)
+        return f"ERROR: {error_msg}"
+
+@mcp.tool()
+async def mqtt_publish(topic: str, message: str, qos: int = 0, retain: bool = False, ctx: Context = None) -> str:
+    """
+    Publish a message to an MQTT topic
+    
+    Args:
+        topic: The MQTT topic to publish to
+        message: The message payload to publish
+        qos: Quality of Service level (0, 1, or 2)
+        retain: Whether the message should be retained by the broker
+    """
+    if not mqtt_client:
+        error_msg = "MQTT client not initialized. Use mqtt_connect first."
+        logger.error(error_msg)
+        return f"ERROR: {error_msg}"
+        
+    if not connection_status["connected"]:
+        error_msg = "MQTT client not connected. Use mqtt_connect first."
+        logger.error(error_msg)
+        return f"ERROR: {error_msg}"
+    
+    try:
+        # Log the attempt
+        logger.info(f"Publishing to topic '{topic}' with QoS {qos}, retain={retain}")
+        logger.debug(f"Message payload: {message[:100]}{'...' if len(message) > 100 else ''}")
+        
+        # Publish the message
+        result = mqtt_client.publish(topic, message, qos=qos, retain=retain)
+        if result.rc == mqtt.MQTT_ERR_SUCCESS:
+            logger.info(f"Successfully published to '{topic}'")
+            return f"Message successfully published to topic '{topic}'"
+        else:
+            error_msg = f"Failed to publish message: {mqtt.error_string(result.rc)}"
+            logger.error(error_msg)
+            return f"ERROR: {error_msg}"
+    except Exception as e:
+        error_msg = f"Error while publishing message: {str(e)}"
+        logger.error(error_msg)
+        return f"ERROR: {error_msg}"
+
+@mcp.tool()
+async def mqtt_subscribe(topic: str, qos: int = 0, ctx: Context = None) -> str:
+    """
+    Subscribe to an MQTT topic
+    
+    Args:
+        topic: The MQTT topic to subscribe to (can include wildcards # and +)
+        qos: Quality of Service level (0, 1, or 2)
+    """
+    if not mqtt_client:
+        error_msg = "MQTT client not initialized. Use mqtt_connect first."
+        logger.error(error_msg)
+        return f"ERROR: {error_msg}"
+        
+    if not connection_status["connected"]:
+        error_msg = "MQTT client not connected. Use mqtt_connect first."
+        logger.error(error_msg)
+        return f"ERROR: {error_msg}"
+    
+    try:
+        # Log the attempt
+        logger.info(f"Subscribing to topic '{topic}' with QoS {qos}")
+        
+        # Subscribe to the topic
+        result, mid = mqtt_client.subscribe(topic, qos)
+        if result == mqtt.MQTT_ERR_SUCCESS:
+            # Track this subscription
+            mqtt_subscriptions[topic] = {
+                "qos": qos,
+                "subscribed_at": datetime.now().isoformat()
+            }
+            
+            logger.info(f"Successfully subscribed to '{topic}'")
+            return f"Successfully subscribed to topic '{topic}' with QoS {qos}"
+        else:
+            error_msg = f"Failed to subscribe to topic: {mqtt.error_string(result)}"
+            logger.error(error_msg)
+            return f"ERROR: {error_msg}"
+    except Exception as e:
+        error_msg = f"Error while subscribing: {str(e)}"
+        logger.error(error_msg)
+        return f"ERROR: {error_msg}"
+
+@mcp.tool()
+async def mqtt_unsubscribe(topic: str, ctx: Context = None) -> str:
+    """
+    Unsubscribe from an MQTT topic
+    
+    Args:
+        topic: The MQTT topic to unsubscribe from
+    """
+    if not mqtt_client:
+        error_msg = "MQTT client not initialized. Use mqtt_connect first."
+        logger.error(error_msg)
+        return f"ERROR: {error_msg}"
+        
+    if not connection_status["connected"]:
+        error_msg = "MQTT client not connected. Use mqtt_connect first."
+        logger.error(error_msg)
+        return f"ERROR: {error_msg}"
+    
+    try:
+        # Log the attempt
+        logger.info(f"Unsubscribing from topic '{topic}'")
+        
+        # Unsubscribe from the topic
+        result, mid = mqtt_client.unsubscribe(topic)
+        if result == mqtt.MQTT_ERR_SUCCESS:
+            # Remove from tracked subscriptions
+            if topic in mqtt_subscriptions:
+                del mqtt_subscriptions[topic]
+                
+            logger.info(f"Successfully unsubscribed from '{topic}'")
+            return f"Successfully unsubscribed from topic '{topic}'"
+        else:
+            error_msg = f"Failed to unsubscribe from topic: {mqtt.error_string(result)}"
+            logger.error(error_msg)
+            return f"ERROR: {error_msg}"
+    except Exception as e:
+        error_msg = f"Error while unsubscribing: {str(e)}"
+        logger.error(error_msg)
+        return f"ERROR: {error_msg}"
+
+@mcp.tool()
+async def mqtt_read_messages(topic: str = None, max_messages: int = 10, clear_buffer: bool = False, ctx: Context = None) -> str:
+    """
+    Read messages from the MQTT message buffer
+    
+    Args:
+        topic: The specific topic to read from (None for all topics)
+        max_messages: Maximum number of messages to return per topic
+        clear_buffer: Whether to clear the message buffer after reading
+    """
+    if not mqtt_client:
+        error_msg = "MQTT client not initialized. Use mqtt_connect first."
+        logger.error(error_msg)
+        return f"ERROR: {error_msg}"
+    
+    try:
+        if not mqtt_message_buffer:
+            logger.info("No messages in buffer")
+            return "No messages have been received yet."
+        
+        # Filter by topic if provided
+        topics_to_read = [topic] if topic else list(mqtt_message_buffer.keys())
+        
+        # Build result
+        result = []
+        
+        for t in topics_to_read:
+            if t in mqtt_message_buffer:
+                messages = mqtt_message_buffer[t][-max_messages:] if max_messages > 0 else mqtt_message_buffer[t]
+                
+                # Format messages for this topic
+                result.append(f"Topic: {t}")
+                result.append(f"Messages: {len(messages)}")
+                result.append("-" * 40)
+                
+                for idx, msg in enumerate(messages):
+                    result.append(f"Message {idx+1}:")
+                    result.append(f"  Payload: {msg['payload']}")
+                    result.append(f"  Timestamp: {datetime.fromtimestamp(msg['timestamp']).isoformat()}")
+                    result.append(f"  QoS: {msg['qos']}")
+                    result.append(f"  Retain: {msg['retain']}")
+                    result.append("-" * 20)
+                
+                # Clear buffer if requested
+                if clear_buffer:
+                    mqtt_message_buffer[t] = []
+            
+        if not result:
+            return f"No messages found for topic '{topic}'" if topic else "No messages found"
+            
+        # Clear all buffer if requested
+        if clear_buffer and not topic:
+            mqtt_message_buffer.clear()
+            
+        logger.info(f"Read {len(result)} messages" + (f" from topic '{topic}'" if topic else ""))
+        return "\n".join(result)
+    except Exception as e:
+        error_msg = f"Error while reading messages: {str(e)}"
+        logger.error(error_msg)
+        return f"ERROR: {error_msg}"
+
+@mcp.tool()
+async def mqtt_list_subscriptions(ctx: Context = None) -> str:
+    """List all active MQTT subscriptions"""
+    if not mqtt_client:
+        error_msg = "MQTT client not initialized. Use mqtt_connect first."
+        logger.error(error_msg)
+        return f"ERROR: {error_msg}"
+        
+    if not connection_status["connected"]:
+        error_msg = "MQTT client not connected. Use mqtt_connect first."
+        logger.error(error_msg)
+        return f"ERROR: {error_msg}"
+    
+    if not mqtt_subscriptions:
+        logger.info("No active subscriptions")
+        return "No active subscriptions"
+        
+    # Format the result
+    result = ["Active MQTT Subscriptions:"]
+    for topic, details in mqtt_subscriptions.items():
+        result.append(f"- Topic: {topic}")
+        result.append(f"  QoS: {details['qos']}")
+        result.append(f"  Subscribed at: {details['subscribed_at']}")
+        
+    logger.info(f"Listed {len(mqtt_subscriptions)} active subscriptions")
+    return "\n".join(result)
 
 if __name__ == "__main__":
     try:
