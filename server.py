@@ -27,7 +27,7 @@ logger = logging.getLogger("CorefluxMCP")
 
 # Parse command-line arguments
 def parse_args():
-    parser = argparse.ArgumentParser(description="Coreflux MCP Server")
+    parser = argparse.ArgumentParser(description="Coreflux MQTT MCP Server")
     parser.add_argument("--mqtt-host", default=os.environ.get("MQTT_BROKER", "localhost"),
                       help="MQTT broker hostname")
     parser.add_argument("--mqtt-port", type=int, default=int(os.environ.get("MQTT_PORT", "1883")),
@@ -375,7 +375,8 @@ def execute_command(command_string):
         logger.error(error_msg)
         return f"ERROR: {error_msg}"
 
-# Tools for Coreflux commands
+# region COREFLUX TOOLS
+
 @mcp.tool()
 async def add_rule(rule_definition: str, ctx: Context) -> str:
     """
@@ -700,6 +701,10 @@ def request_lot_code(ctx: Context, query: str, context: str = "") -> str:
         logger.error(error_msg, exc_info=True)
         return f"Error: {error_msg}"
 
+# endregion
+
+# region MCP RESOURCES
+
 # Resources for LOT language documentation
 @mcp.resource("lot://documentation/models")
 def lot_models_docs() -> str:
@@ -798,6 +803,10 @@ DESCRIPTION "Turns a specific topic off"
 
 """
 
+# endregion
+
+# region MQTT TOOLS
+
 @mcp.tool()
 async def reconnect_mqtt(ctx: Context) -> str:
     """Force a reconnection to the MQTT broker"""
@@ -852,7 +861,7 @@ async def check_broker_health(ctx: Context) -> str:
 async def mqtt_connect(broker: str, port: int = 1883, username: str = None, password: str = None, 
                       client_id: str = None, use_tls: bool = False, ctx: Context = None) -> str:
     """
-    Connect to a specific MQTT broker
+    Connect to a specific MQTT broker.
     
     Args:
         broker: The MQTT broker hostname or IP address
@@ -861,6 +870,9 @@ async def mqtt_connect(broker: str, port: int = 1883, username: str = None, pass
         password: Optional password for authentication
         client_id: Optional client ID (default: auto-generated)
         use_tls: Whether to use TLS encryption (default: False)
+        
+    Returns:
+        A string indicating success or failure of the connection attempt
     """
     global mqtt_client
     
@@ -915,15 +927,21 @@ async def mqtt_connect(broker: str, port: int = 1883, username: str = None, pass
         return f"ERROR: {error_msg}"
 
 @mcp.tool()
-async def mqtt_publish(topic: str, message: str, qos: int = 0, retain: bool = False, ctx: Context = None) -> str:
+async def mqtt_publish(topic: str, message: str, qos: int = 0, retain: bool = False, is_json: bool = False, ctx: Context = None) -> str:
     """
-    Publish a message to an MQTT topic
+    Publish a message to an MQTT topic.
     
+    IMPORTANT: Please format the message as a string. If you need to send JSON, please format it as a string with escaped quotes.
+
     Args:
         topic: The MQTT topic to publish to
-        message: The message payload to publish
+        message: The message payload to publish (string or JSON object)
         qos: Quality of Service level (0, 1, or 2)
         retain: Whether the message should be retained by the broker
+        is_json: Force message to be treated as JSON (default: auto-detect)
+        
+    Returns:
+        A string confirming successful publication or describing an error
     """
     if not mqtt_client:
         error_msg = "MQTT client not initialized. Use mqtt_connect first."
@@ -936,12 +954,35 @@ async def mqtt_publish(topic: str, message: str, qos: int = 0, retain: bool = Fa
         return f"ERROR: {error_msg}"
     
     try:
+        # Format message as JSON if needed
+        if is_json or (isinstance(message, str) and 
+                       ((message.startswith('{') and message.endswith('}')) or 
+                        (message.startswith('[') and message.endswith(']')))):
+            try:
+                # First check if it's already a valid JSON string
+                json.loads(message)
+                payload = message
+                logger.debug("Message is already valid JSON string")
+            except (json.JSONDecodeError, TypeError):
+                # If not a valid JSON string, try to serialize it
+                try:
+                    payload = json.dumps(message if not isinstance(message, str) else json.loads(message))
+                    logger.debug("Converted message to JSON format")
+                except (json.JSONDecodeError, TypeError):
+                    # If it looks like JSON but isn't valid, just convert the string to JSON
+                    payload = json.dumps(message)
+                    logger.debug("Treated message as string and formatted as JSON")
+        else:
+            # Use message as-is if not JSON
+            payload = message
+            logger.debug("Using message as plain string")
+        
         # Log the attempt
         logger.info(f"Publishing to topic '{topic}' with QoS {qos}, retain={retain}")
-        logger.debug(f"Message payload: {message[:100]}{'...' if len(message) > 100 else ''}")
+        logger.debug(f"Message payload: {payload[:100]}{'...' if len(payload) > 100 else ''}")
         
         # Publish the message
-        result = mqtt_client.publish(topic, message, qos=qos, retain=retain)
+        result = mqtt_client.publish(topic, payload, qos=qos, retain=retain)
         if result.rc == mqtt.MQTT_ERR_SUCCESS:
             logger.info(f"Successfully published to '{topic}'")
             return f"Message successfully published to topic '{topic}'"
@@ -957,11 +998,14 @@ async def mqtt_publish(topic: str, message: str, qos: int = 0, retain: bool = Fa
 @mcp.tool()
 async def mqtt_subscribe(topic: str, qos: int = 0, ctx: Context = None) -> str:
     """
-    Subscribe to an MQTT topic
+    Subscribe to an MQTT topic.
     
     Args:
         topic: The MQTT topic to subscribe to (can include wildcards # and +)
         qos: Quality of Service level (0, 1, or 2)
+        
+    Returns:
+        A string confirming successful subscription or describing an error
     """
     if not mqtt_client:
         error_msg = "MQTT client not initialized. Use mqtt_connect first."
@@ -1000,10 +1044,13 @@ async def mqtt_subscribe(topic: str, qos: int = 0, ctx: Context = None) -> str:
 @mcp.tool()
 async def mqtt_unsubscribe(topic: str, ctx: Context = None) -> str:
     """
-    Unsubscribe from an MQTT topic
+    Unsubscribe from an MQTT topic.
     
     Args:
         topic: The MQTT topic to unsubscribe from
+        
+    Returns:
+        A string confirming successful unsubscription or describing an error
     """
     if not mqtt_client:
         error_msg = "MQTT client not initialized. Use mqtt_connect first."
@@ -1040,12 +1087,15 @@ async def mqtt_unsubscribe(topic: str, ctx: Context = None) -> str:
 @mcp.tool()
 async def mqtt_read_messages(topic: str = None, max_messages: int = 10, clear_buffer: bool = False, ctx: Context = None) -> str:
     """
-    Read messages from the MQTT message buffer
+    Read messages from the MQTT message buffer.
     
     Args:
         topic: The specific topic to read from (None for all topics)
         max_messages: Maximum number of messages to return per topic
         clear_buffer: Whether to clear the message buffer after reading
+        
+    Returns:
+        A formatted string containing the retrieved messages or error information
     """
     if not mqtt_client:
         error_msg = "MQTT client not initialized. Use mqtt_connect first."
@@ -1100,7 +1150,12 @@ async def mqtt_read_messages(topic: str = None, max_messages: int = 10, clear_bu
 
 @mcp.tool()
 async def mqtt_list_subscriptions(ctx: Context = None) -> str:
-    """List all active MQTT subscriptions"""
+    """
+    List all active MQTT subscriptions.
+    
+    Returns:
+        A formatted string listing all active subscriptions
+    """
     if not mqtt_client:
         error_msg = "MQTT client not initialized. Use mqtt_connect first."
         logger.error(error_msg)
@@ -1125,9 +1180,11 @@ async def mqtt_list_subscriptions(ctx: Context = None) -> str:
     logger.info(f"Listed {len(mqtt_subscriptions)} active subscriptions")
     return "\n".join(result)
 
+# endregion
+
 if __name__ == "__main__":
     try:
-        logger.info("Starting Coreflux MCP Server")
+        logger.info("Starting Coreflux MQTT MCP Server")
         
         # Parse command-line arguments
         args = parse_args()

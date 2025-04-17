@@ -1,6 +1,6 @@
-# Coreflux MCP Server
+# Coreflux MQTT MCP Server
 
-This is a Model Context Protocol (MCP) server that connects to a Coreflux MQTT broker and makes Coreflux actions available as tools for Claude and other MCP-compatible AI assistants.
+This is a Model Context Protocol (MCP) server that connects to a Coreflux MQTT broker and makes Coreflux and MQTT actions available as tools for Claude and other MCP-compatible AI assistants.
 
 ## Features
 
