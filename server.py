@@ -10,6 +10,8 @@ import sys
 import time
 from datetime import datetime
 from dotenv import load_dotenv
+from parser import process_json_rpc_message
+from typing import Optional
 
 # Load environment variables from .env file if it exists
 load_dotenv()
@@ -135,99 +137,83 @@ def on_message(client, userdata, msg):
         if len(mqtt_message_buffer[topic]) > 100:
             mqtt_message_buffer[topic] = mqtt_message_buffer[topic][-100:]
         
-        # Continue with the original logic for extracting action descriptions
         # Extract action name from topic
         topic_parts = msg.topic.split('/')
         if len(topic_parts) >= 4 and topic_parts[-1] == "Description":
             action_name = topic_parts[-2]
+            
+            # Log the raw data for debugging
+            payload_raw = msg.payload
+            logger.debug(f"Raw message received: {repr(payload_raw)}")
+            
             try:
-                payload_raw = msg.payload
-                # Debug the raw message
-                logger.debug(f"Raw message received: {repr(payload_raw)}")
-                
-                # Check for common JSON formatting issues
+                # Safe decoding of the payload
                 payload_str = payload_raw.decode('utf-8').strip()
                 
-                # Handle multiple JSON objects case (position 4 error often occurs when multiple JSONs are concatenated)
-                if payload_str.count('{') > 1 or payload_str.count('}') > 1:
-                    logger.warning(f"Multiple JSON objects detected: {payload_str}")
-                    # Try to extract just the first valid JSON object
-                    if '{' in payload_str and '}' in payload_str:
-                        first_open = payload_str.find('{')
-                        first_close = payload_str.find('}', first_open)
-                        if first_close > first_open:
-                            payload_str = payload_str[first_open:first_close+1]
-                            logger.info(f"Extracted first JSON object: {payload_str}")
+                # Extract description using more robust parsing
+                description = extract_description_safely(payload_str)
                 
-                # Try to parse the JSON with error handling
-                try:
-                    # If payload appears to be JSON, parse it
-                    if payload_str.startswith('{') and payload_str.endswith('}'):
-                        description_obj = json.loads(payload_str)
-                        # Extract description from JSON if needed
-                        if isinstance(description_obj, dict) and 'description' in description_obj:
-                            description = description_obj['description']
-                        else:
-                            description = payload_str
-                    else:
-                        description = payload_str
-                except json.JSONDecodeError as e:
-                    logger.warning(f"JSON parse error: {str(e)}")
-                    # Handle the common "Extra data" error (position 4 issue)
-                    if "Extra data" in str(e) or "Unexpected non-whitespace character" in str(e):
-                        # Try to extract just the valid JSON part by finding matching brackets
-                        try:
-                            # Find the first valid JSON object
-                            stack = []
-                            valid_end = -1
-                            for i, char in enumerate(payload_str):
-                                if char == '{':
-                                    stack.append(i)
-                                elif char == '}' and stack:
-                                    start = stack.pop()
-                                    if not stack:  # If this closes the outermost object
-                                        valid_end = i
-                                        break
-                            
-                            if valid_end > 0:
-                                valid_json = payload_str[:valid_end+1]
-                                logger.info(f"Extracted valid JSON: {valid_json}")
-                                description_obj = json.loads(valid_json)
-                                if isinstance(description_obj, dict) and 'description' in description_obj:
-                                    description = description_obj['description']
-                                else:
-                                    description = valid_json
-                            else:
-                                # Just use it as a string if we can't parse it as JSON
-                                description = payload_str
-                        except Exception as inner_e:
-                            logger.error(f"Error extracting valid JSON: {str(inner_e)}")
-                            description = payload_str
-                    else:
-                        # Not a JSON error we specifically handle, use as string
-                        description = payload_str
-
+                # Check if we already have this action
+                if action_name in discovered_actions:
+                    # Only update the description if it changed
+                    if discovered_actions[action_name] != description:
+                        discovered_actions[action_name] = description
+                        logger.info(f"Updated action description: {action_name} - {description}")
+                    return
+                    
+                # New action discovered
+                discovered_actions[action_name] = description
+                logger.info(f"Discovered new action: {action_name} - {description}")
+                
+                # Register a dynamic tool for this action if not already registered
+                if action_name not in registered_dynamic_tools:
+                    register_dynamic_action_tool(action_name, description)
+            
             except UnicodeDecodeError as e:
                 logger.error(f"Failed to decode message payload: {str(e)}")
                 return
-            
-            # Check if we already have this action
-            if action_name in discovered_actions:
-                # Only update the description if it changed
-                if discovered_actions[action_name] != description:
-                    discovered_actions[action_name] = description
-                    logger.info(f"Updated action description: {action_name} - {description}")
-                return
                 
-            # New action discovered
-            discovered_actions[action_name] = description
-            logger.info(f"Discovered new action: {action_name} - {description}")
-            
-            # Register a dynamic tool for this action if not already registered
-            if action_name not in registered_dynamic_tools:
-                register_dynamic_action_tool(action_name, description)
     except Exception as e:
         logger.error(f"Error processing MQTT message: {str(e)}", exc_info=True)
+
+# Helper function for safely extracting descriptions from potentially malformed JSON
+def extract_description_safely(payload_str):
+    """
+    Extract description from a payload string that might be JSON or plain text.
+    Implements robust parsing to handle malformed JSON gracefully.
+    
+    Args:
+        payload_str: The string to parse
+        
+    Returns:
+        A string representing the description
+    """
+    # If it's empty, return empty string
+    if not payload_str or not payload_str.strip():
+        return ""
+        
+    # If it doesn't look like JSON, just return the string as-is
+    if not (payload_str.strip().startswith('{') and payload_str.strip().endswith('}')):
+        return payload_str.strip()
+    
+    # It looks like JSON, try to parse it properly
+    try:
+        # Parse as JSON using the parser module
+        data = process_json_rpc_message(payload_str)
+        
+        # If it's a dict with a description field, return that
+        if isinstance(data, dict) and 'description' in data:
+            return data['description']
+        
+        # Otherwise, return the whole object as a string
+        return payload_str
+    
+    except Exception as e:
+        logger.warning(f"JSON parse error: {str(e)}")
+        logger.debug(f"Problematic payload: {payload_str}")
+        
+        # Return the payload as-is since we couldn't parse it
+        return payload_str
 
 def register_dynamic_action_tool(action_name, description):
     try:
@@ -238,19 +224,22 @@ def register_dynamic_action_tool(action_name, description):
         # Create a unique function name for this action
         tool_func_name = f"run_{action_name}"
         
-        # Escape any quotes in the description to avoid syntax errors
-        escaped_description = description.replace('"', '\\"').replace("'", "\\'")
+        # Create function in a safer way - avoid direct string interpolation in exec
+        # Create the function text with proper escaping for the docstring
+        description_safe = description.replace('\\', '\\\\').replace('"', '\\"')
         
-        # We need to create a function with a dynamic name
-        # This approach uses exec to create a function with the exact name we want
-        exec(f"""
+        # Define the function code
+        func_code = f'''
 @mcp.tool()
 async def {tool_func_name}(ctx: Context) -> str:
-    \"\"\"Run the {action_name} action: {escaped_description}\"\"\"
+    """Run the {action_name} action: {description_safe}"""
     response = execute_command(f"-runAction {action_name}")
     logger.info(f"Executed action {action_name}")
     return response
-""", globals())
+'''
+        
+        # Execute the code in global scope
+        exec(func_code, globals())
         
         # Mark as registered
         registered_dynamic_tools.add(action_name)
@@ -567,36 +556,52 @@ def request_lot_code(ctx: Context, query: str, context: str = "") -> str:
         
     api_url = "https://anselmo.coreflux.org/webhook/chat_lot_beta"
     
-    # Sanitize input to prevent JSON formatting issues
-    # Remove any control characters that might cause JSON parsing problems
+    # Improved sanitization for JSON safety
     def sanitize_for_json(text):
         if not text:
             return ""
-        # Replace problematic control characters and ensure valid UTF-8
+        # Handle non-string input
+        if not isinstance(text, str):
+            try:
+                return str(text)
+            except Exception as e:
+                logger.warning(f"Failed to convert to string: {e}")
+                return ""
+        
+        # Replace control characters
         for char in ['\b', '\f', '\n', '\r', '\t']:
             text = text.replace(char, ' ')
-        # Ensure we don't have any unescaped quotes that could break JSON
-        text = text.replace('\\', '\\\\').replace('"', '\\"')
-        return text
+        
+        # Ensure proper escaping of quotes and backslashes for JSON
+        return text.replace('\\', '\\\\').replace('"', '\\"')
     
     # Create a proper JSON-RPC compatible payload
     sanitized_query = sanitize_for_json(query)
     sanitized_context = sanitize_for_json(context) if context else ""
     
-    # Create JSON-RPC structured payload with ID and properly formatted params
-    payload = {
-        "jsonrpc": "2.0",
-        "id": str(uuid.uuid4()),
-        "method": "lot_code_generation",
-        "params": {
-            "query": sanitized_query,
-            "context": sanitized_context
+    # Create payload with proper validation
+    try:
+        payload = {
+            "jsonrpc": "2.0",
+            "id": str(uuid.uuid4()),
+            "method": "lot_code_generation",
+            "params": {
+                "query": sanitized_query,
+                "context": sanitized_context
+            }
         }
-    }
-    
-    # Log the actual data being sent (for debugging)
-    logger.debug(f"Sending JSON-RPC request: {json.dumps(payload, ensure_ascii=False)}")
-    logger.info(f"Requesting LOT code generation with query: {sanitized_query[:50]}..." if len(sanitized_query) > 50 else f"Requesting LOT code generation with query: {sanitized_query}")
+        
+        # Validate payload is proper JSON before sending
+        payload_json = json.dumps(payload, ensure_ascii=False)
+        # Verify we can parse it back
+        process_json_rpc_message(payload_json)
+        
+        logger.debug(f"Sending JSON-RPC request: {payload_json[:200]}...")
+        logger.info(f"Requesting LOT code generation with query: {sanitized_query[:50]}..." if len(sanitized_query) > 50 else f"Requesting LOT code generation with query: {sanitized_query}")
+    except Exception as e:
+        error_msg = f"Failed to create valid JSON payload: {str(e)}"
+        logger.error(error_msg)
+        return f"Error: {error_msg}"
     
     try:
         # Set proper Content-Type header to ensure correct JSON interpretation
@@ -608,82 +613,8 @@ def request_lot_code(ctx: Context, query: str, context: str = "") -> str:
         logger.debug(f"Raw API response content: {response.text[:200]}..." if len(response.text) > 200 else response.text)
         
         if response.status_code == 200:
-            try:
-                # Parse the response with strict JSON validation
-                result = json.loads(response.text.strip())
-                
-                # Check if we got a valid JSON-RPC response
-                if isinstance(result, dict):
-                    # Handle both direct result and JSON-RPC formatted responses
-                    if "result" in result:
-                        # Extract from JSON-RPC result field
-                        result = result["result"]
-                    
-                    # For formatted output in the log
-                    formatted_json = result.get("raw output", "No output found.")
-                    logger.info(f"LOT code generation successful: {formatted_json[:200]}...")
-                    
-                    # Return the result directly as a string, with proper formatting
-                    # Use a structured format for better readability
-                    output = []
-                    
-                    if "title" in result:
-                        output.append(f"# {result['title']}")
-                        output.append("")
-                    
-                    if "description" in result:
-                        output.append(result['description'])
-                        output.append("")
-                    
-                    if "lot_code" in result:
-                        output.append("```")
-                        output.append(result['lot_code'])
-                        output.append("```")
-                        output.append("")
-                    
-                    if "explanation" in result:
-                        output.append("## Explanation")
-                        output.append(result['explanation'])
-                    
-                    # Join all parts with newlines and return
-                    return "\n".join(output)
-                else:
-                    error_msg = "Invalid response format: not a JSON object"
-                    logger.error(error_msg)
-                    return f"Error: {error_msg}"
-                    
-            except json.JSONDecodeError as e:
-                error_msg = f"Failed to parse API response: {str(e)}"
-                logger.error(error_msg)
-                logger.debug(f"JSON parse error details: {str(e)}, line: {e.lineno}, col: {e.colno}, pos: {e.pos}")
-                
-                # Try to recover data from partial JSON if possible
-                try:
-                    if "{" in response.text and "}" in response.text:
-                        # Find first complete JSON object
-                        start = response.text.find("{")
-                        stack = []
-                        end = -1
-                        
-                        for i, char in enumerate(response.text[start:]):
-                            if char == '{':
-                                stack.append(i)
-                            elif char == '}' and stack:
-                                stack.pop()
-                                if not stack:
-                                    end = start + i + 1
-                                    break
-                        
-                        if end > start:
-                            valid_json = response.text[start:end]
-                            logger.info(f"Attempting to parse recovered JSON: {valid_json[:50]}...")
-                            recovered = json.loads(valid_json)
-                            return f"Recovered partial response: {str(recovered)[:200]}..."
-                except Exception:
-                    # If recovery fails, just return the original error
-                    pass
-                    
-                return f"Error: {error_msg}"
+            # Process the response with enhanced error handling
+            return process_lot_code_response(response.text)
         else:
             error_msg = f"API request failed with status {response.status_code}"
             logger.error(error_msg)
@@ -700,6 +631,114 @@ def request_lot_code(ctx: Context, query: str, context: str = "") -> str:
         error_msg = f"Error making API request: {str(e)}"
         logger.error(error_msg, exc_info=True)
         return f"Error: {error_msg}"
+
+def process_lot_code_response(response_text):
+    """
+    Process the response from the LOT code generation API with robust JSON handling.
+    
+    Args:
+        response_text: The raw API response text
+        
+    Returns:
+        A formatted string with the processed result, or an error message
+    """
+    if not response_text or not response_text.strip():
+        error_msg = "Empty API response"
+        logger.error(error_msg)
+        return f"Error: {error_msg}"
+    
+    # Normalize the response text
+    cleaned_text = response_text.strip()
+    
+    try:
+        # Try to parse the response using the parser module
+        result = process_json_rpc_message(cleaned_text)
+        
+        # Use schema validation to ensure we have a valid structure
+        if not isinstance(result, dict):
+            error_msg = "Invalid response format: not a JSON object"
+            logger.error(error_msg)
+            logger.debug(f"Response: {cleaned_text[:200]}...")
+            return f"Error: {error_msg}"
+            
+        # Extract the result from JSON-RPC style response if needed
+        if "result" in result:
+            result = result["result"]
+            
+        # Log success
+        logger.info(f"LOT code generation successful")
+        
+        # Format the response for output
+        return format_lot_code_output(result)
+        
+    except json.JSONDecodeError as e:
+        # Log the detailed error
+        error_msg = f"Failed to parse API response: {str(e)}"
+        logger.error(error_msg)
+        logger.debug(f"JSON parse error details: {str(e)}, line: {e.lineno}, col: {e.colno}, pos: {e.pos}")
+        logger.debug(f"Problematic response: {cleaned_text[:500]}...")
+        
+        # Return a user-friendly error message
+        return f"Error: Failed to parse the API response. The service may be experiencing issues."
+    except Exception as e:
+        error_msg = f"Error processing API response: {str(e)}"
+        logger.error(error_msg)
+        logger.debug(f"Problematic response: {cleaned_text[:500]}...")
+        return f"Error: {error_msg}"
+
+def format_lot_code_output(result):
+    """
+    Format the LOT code generation result for better readability.
+    
+    Args:
+        result: The parsed result object
+        
+    Returns:
+        A formatted string with the processed result
+    """
+    # Initialize output array
+    output = []
+    
+    # Extract fields with safe access
+    def safe_get(obj, key, default=""):
+        """Safely get a value from a dictionary"""
+        if isinstance(obj, dict) and key in obj:
+            value = obj[key]
+            return value if value is not None else default
+        return default
+    
+    # Add title if present
+    title = safe_get(result, "title")
+    if title:
+        output.append(f"# {title}")
+        output.append("")
+    
+    # Add description if present
+    description = safe_get(result, "description")
+    if description:
+        output.append(description)
+        output.append("")
+    
+    # Add LOT code if present
+    lot_code = safe_get(result, "lot_code")
+    if lot_code:
+        output.append("```")
+        output.append(lot_code)
+        output.append("```")
+        output.append("")
+    
+    # Add explanation if present
+    explanation = safe_get(result, "explanation")
+    if explanation:
+        output.append("## Explanation")
+        output.append(explanation)
+    
+    # If we didn't recognize any fields, return the raw object as string
+    if not output:
+        return f"Received response: {json.dumps(result, indent=2)}"
+        
+    # Join all parts with newlines and return
+    return "\n".join(output)
 
 # endregion
 
@@ -959,14 +998,14 @@ async def mqtt_publish(topic: str, message: str, qos: int = 0, retain: bool = Fa
                        ((message.startswith('{') and message.endswith('}')) or 
                         (message.startswith('[') and message.endswith(']')))):
             try:
-                # First check if it's already a valid JSON string
-                json.loads(message)
+                # First check if it's already a valid JSON string using the parser module
+                process_json_rpc_message(message)
                 payload = message
                 logger.debug("Message is already valid JSON string")
             except (json.JSONDecodeError, TypeError):
                 # If not a valid JSON string, try to serialize it
                 try:
-                    payload = json.dumps(message if not isinstance(message, str) else json.loads(message))
+                    payload = json.dumps(message if not isinstance(message, str) else process_json_rpc_message(message))
                     logger.debug("Converted message to JSON format")
                 except (json.JSONDecodeError, TypeError):
                     # If it looks like JSON but isn't valid, just convert the string to JSON
@@ -1085,7 +1124,7 @@ async def mqtt_unsubscribe(topic: str, ctx: Context = None) -> str:
         return f"ERROR: {error_msg}"
 
 @mcp.tool()
-async def mqtt_read_messages(topic: str = None, max_messages: int = 10, clear_buffer: bool = False, ctx: Context = None) -> str:
+async def mqtt_read_messages(topic: Optional[str] = None, max_messages: int = 10, clear_buffer: bool = False, ctx: Context = None) -> str:
     """
     Read messages from the MQTT message buffer.
     
