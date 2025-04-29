@@ -12,6 +12,8 @@ from datetime import datetime
 from dotenv import load_dotenv
 from parser import process_json_rpc_message
 from typing import Optional
+import pydantic
+from pydantic import BaseModel, validator
 
 # Define a custom NONE logging level (higher than CRITICAL)
 NONE_LEVEL = 100  # Higher than CRITICAL (50)
@@ -880,6 +882,21 @@ DESCRIPTION "Turns a specific topic off"
 
 # region MQTT TOOLS
 
+class MqttMessageModel(BaseModel):
+    message: str
+
+    @validator('message', pre=True)
+    def ensure_json_string(cls, v):
+        import json
+        if isinstance(v, dict):
+            return json.dumps(v)
+        # Validate that the string is valid JSON
+        try:
+            json.loads(v)
+        except Exception:
+            raise ValueError("message must be a valid JSON string")
+        return v
+
 @mcp.tool()
 async def reconnect_mqtt(ctx: Context) -> str:
     """Force a reconnection to the MQTT broker"""
@@ -1000,7 +1017,7 @@ async def mqtt_connect(broker: str, port: int = 1883, username: str = None, pass
         return f"ERROR: {error_msg}"
 
 @mcp.tool()
-async def mqtt_publish(topic: str, message: str, qos: int = 0, retain: bool = False, is_json: bool = False, ctx: Context = None) -> str:
+async def mqtt_publish(topic: str, message, qos: int = 0, retain: bool = False, is_json: bool = False, ctx: Context = None) -> str:
     """
     Publish a message to an MQTT topic.
     
@@ -1027,28 +1044,15 @@ async def mqtt_publish(topic: str, message: str, qos: int = 0, retain: bool = Fa
         return f"ERROR: {error_msg}"
     
     try:
-        # Format message as JSON if needed
-        if is_json or (isinstance(message, str) and 
-                       ((message.startswith('{') and message.endswith('}')) or 
-                        (message.startswith('[') and message.endswith(']')))):
-            try:
-                # First check if it's already a valid JSON string using the parser module
-                process_json_rpc_message(message)
-                payload = message
-                logger.debug("Message is already valid JSON string")
-            except (json.JSONDecodeError, TypeError):
-                # If not a valid JSON string, try to serialize it
-                try:
-                    payload = json.dumps(message if not isinstance(message, str) else process_json_rpc_message(message))
-                    logger.debug("Converted message to JSON format")
-                except (json.JSONDecodeError, TypeError):
-                    # If it looks like JSON but isn't valid, just convert the string to JSON
-                    payload = json.dumps(message)
-                    logger.debug("Treated message as string and formatted as JSON")
-        else:
-            # Use message as-is if not JSON
-            payload = message
-            logger.debug("Using message as plain string")
+        # Validate and serialize message as JSON string using Pydantic
+        try:
+            validated = MqttMessageModel(message=message)
+            payload = validated.message
+            logger.debug("Message validated and serialized as JSON string")
+        except Exception as e:
+            error_msg = f"Message validation failed: {e}"
+            logger.error(error_msg)
+            return f"ERROR: {error_msg}"
         
         # Log the attempt
         logger.info(f"Publishing to topic '{topic}' with QoS {qos}, retain={retain}")
