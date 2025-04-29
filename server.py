@@ -44,7 +44,7 @@ def setup_logging(level_name):
     # Add handlers with our formatter
     handlers = [
         logging.FileHandler("coreflux_mcp.log"),
-        logging.StreamHandler(sys.stdout)
+        logging.StreamHandler(sys.stderr)
     ]
     
     for handler in handlers:
@@ -1265,7 +1265,7 @@ if __name__ == "__main__":
         # Initialize MQTT connection
         if not setup_mqtt(args):
             logger.error("Failed to initialize MQTT connection. Exiting.")
-            print("Failed to initialize MQTT connection. Run setup_assistant.py to configure your connection.")
+            logger.error("Failed to initialize MQTT connection. Run setup_assistant.py to configure your connection.")
             sys.exit(1)
         
         # Log startup information

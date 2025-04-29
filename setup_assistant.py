@@ -24,7 +24,7 @@ def setup_logging(level_name="INFO"):
     fmt = '%(asctime)s - %(levelname)s - %(message)s'
     
     # Configure a handler with our format
-    handler = logging.StreamHandler(sys.stdout)
+    handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(logging.Formatter(fmt))
     handler.setLevel(level)
     
