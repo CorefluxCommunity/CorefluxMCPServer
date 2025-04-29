@@ -1253,6 +1253,95 @@ async def mqtt_list_subscriptions(ctx: Context = None) -> str:
     logger.info(f"Listed {len(mqtt_subscriptions)} active subscriptions")
     return "\n".join(result)
 
+@mcp.tool()
+async def mqtt_read_topic_once(topic: str, timeout: float = 5.0, qos: int = 0, ctx: Context = None) -> str:
+    """
+    One-off MQTT topic read: Subscribes to a topic, waits for a single message, then unsubscribes and returns the message.
+    This is for single, immediate reads (not continuous monitoring).
+
+    Args:
+        topic: The MQTT topic to read from
+        timeout: Maximum time (in seconds) to wait for a message (default: 5.0)
+        qos: Quality of Service level (0, 1, or 2)
+    Returns:
+        The first received message payload, or an error/timeout message
+    """
+    if not mqtt_client:
+        error_msg = "MQTT client not initialized. Use mqtt_connect first."
+        logger.error(error_msg)
+        return f"ERROR: {error_msg}"
+    if not connection_status["connected"]:
+        error_msg = "MQTT client not connected. Use mqtt_connect first."
+        logger.error(error_msg)
+        return f"ERROR: {error_msg}"
+    event = None
+    message_holder = {}
+    import threading
+    def on_temp_message(client, userdata, msg):
+        try:
+            message_holder["payload"] = msg.payload.decode("utf-8", errors="replace")
+            message_holder["timestamp"] = time.time()
+            message_holder["qos"] = msg.qos
+            message_holder["retain"] = msg.retain
+        except Exception as e:
+            message_holder["payload"] = str(msg.payload)
+        if event:
+            event.set()
+    event = threading.Event()
+    # Temporarily add a message callback for this topic
+    mqtt_client.message_callback_add(topic, on_temp_message)
+    try:
+        logger.info(f"[One-off] Subscribing to topic '{topic}' for one message (timeout {timeout}s)")
+        result, mid = mqtt_client.subscribe(topic, qos)
+        if result != mqtt.MQTT_ERR_SUCCESS:
+            return f"ERROR: Failed to subscribe: {mqtt.error_string(result)}"
+        # Wait for a message or timeout
+        got_message = event.wait(timeout)
+        mqtt_client.unsubscribe(topic)
+        mqtt_client.message_callback_remove(topic)
+        if got_message and "payload" in message_holder:
+            return f"Received message on '{topic}': {message_holder['payload']}"
+        else:
+            return f"Timeout: No message received on '{topic}' within {timeout} seconds."
+    except Exception as e:
+        logger.error(f"Error in mqtt_read_topic_once: {e}")
+        return f"ERROR: {e}"
+
+@mcp.tool()
+async def mqtt_monitor_topic(topic: str, qos: int = 0, ctx: Context = None) -> str:
+    """
+    Monitor MQTT topic: Subscribes to a topic for continuous monitoring. Messages will be buffered and can be read using mqtt_read_messages.
+    This tool does NOT unsubscribe automatically. Use mqtt_unsubscribe to stop monitoring.
+
+    Args:
+        topic: The MQTT topic to monitor
+        qos: Quality of Service level (0, 1, or 2)
+    Returns:
+        Confirmation of subscription or error message
+    """
+    if not mqtt_client:
+        error_msg = "MQTT client not initialized. Use mqtt_connect first."
+        logger.error(error_msg)
+        return f"ERROR: {error_msg}"
+    if not connection_status["connected"]:
+        error_msg = "MQTT client not connected. Use mqtt_connect first."
+        logger.error(error_msg)
+        return f"ERROR: {error_msg}"
+    try:
+        logger.info(f"[Monitor] Subscribing to topic '{topic}' for monitoring")
+        result, mid = mqtt_client.subscribe(topic, qos)
+        if result == mqtt.MQTT_ERR_SUCCESS:
+            mqtt_subscriptions[topic] = {
+                "qos": qos,
+                "subscribed_at": datetime.now().isoformat()
+            }
+            return f"Now monitoring topic '{topic}' (QoS {qos}). Use mqtt_read_messages to view messages."
+        else:
+            return f"ERROR: Failed to subscribe: {mqtt.error_string(result)}"
+    except Exception as e:
+        logger.error(f"Error in mqtt_monitor_topic: {e}")
+        return f"ERROR: {e}"
+
 # endregion
 
 if __name__ == "__main__":
