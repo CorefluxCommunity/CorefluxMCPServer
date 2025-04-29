@@ -8,7 +8,12 @@ import json
 import logging
 import re
 
-# Set up logger
+# Define a custom NONE logging level (higher than CRITICAL) if not already defined
+if not hasattr(logging, 'NONE'):
+    NONE_LEVEL = 100  # Higher than CRITICAL (50)
+    logging.addLevelName(NONE_LEVEL, "NONE")
+
+# Set up logger - but don't configure it here, let the main app configure logging
 logger = logging.getLogger("CorefluxMCP.JsonParser")
 
 def process_json_rpc_message(message: str) -> dict:

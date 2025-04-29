@@ -13,19 +13,49 @@ from dotenv import load_dotenv
 from parser import process_json_rpc_message
 from typing import Optional
 
+# Define a custom NONE logging level (higher than CRITICAL)
+NONE_LEVEL = 100  # Higher than CRITICAL (50)
+logging.addLevelName(NONE_LEVEL, "NONE")
+
 # Load environment variables from .env file if it exists
 load_dotenv()
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
+def setup_logging(level_name):
+    # Special handling for NONE level
+    if level_name == "NONE":
+        # Disable all logging by setting level to NONE_LEVEL
+        level = NONE_LEVEL
+    else:
+        # Use standard logging levels
+        level = getattr(logging, level_name, logging.INFO)
+    
+    # Create a logger with our app name
+    logger = logging.getLogger("CorefluxMCP")
+    logger.setLevel(level)
+    
+    # Remove any existing handlers to avoid duplicates
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+    
+    # Use a format that doesn't conflict with MCP's logging
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    
+    # Add handlers with our formatter
+    handlers = [
         logging.FileHandler("coreflux_mcp.log"),
         logging.StreamHandler(sys.stdout)
     ]
-)
-logger = logging.getLogger("CorefluxMCP")
+    
+    for handler in handlers:
+        handler.setFormatter(formatter)
+        handler.setLevel(level)
+        logger.addHandler(handler)
+    
+    # Don't interfere with the root logger, which MCP might use
+    logger.propagate = False
+        
+    return logger
 
 # Parse command-line arguments
 def parse_args():
@@ -49,9 +79,13 @@ def parse_args():
     parser.add_argument("--mqtt-client-key", default=os.environ.get("MQTT_CLIENT_KEY"),
                       help="Path to client key file for TLS")
     parser.add_argument("--log-level", default=os.environ.get("LOG_LEVEL", "INFO"),
-                      choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-                      help="Set logging level")
+                      choices=["NONE", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+                      help="Set logging level (NONE disables all logging)")
     return parser.parse_args()
+
+# Get command line arguments and setup logging
+args = parse_args()
+logger = setup_logging(args.log_level)
 
 # Configure FastMCP server
 mcp = FastMCP(

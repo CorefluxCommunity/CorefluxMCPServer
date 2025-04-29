@@ -6,15 +6,43 @@ from dotenv import load_dotenv
 import sys
 import argparse
 
+# Define a custom NONE logging level (higher than CRITICAL)
+NONE_LEVEL = 100  # Higher than CRITICAL (50)
+logging.addLevelName(NONE_LEVEL, "NONE")
+
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger("CorefluxMCP")
+def setup_logging(level_name="INFO"):
+    # Special handling for NONE level
+    if level_name == "NONE":
+        # Disable all logging by setting level to NONE_LEVEL
+        level = NONE_LEVEL
+    else:
+        # Use standard logging levels
+        level = getattr(logging, level_name, logging.INFO)
+    
+    # Use a format that doesn't include 'name' to avoid conflicts
+    fmt = '%(asctime)s - %(levelname)s - %(message)s'
+    
+    # Configure a handler with our format
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter(fmt))
+    handler.setLevel(level)
+    
+    # Get logger without setting a basicConfig that might conflict with MCP
+    logger = logging.getLogger("CorefluxMCP")
+    logger.setLevel(level)
+    
+    # Remove any existing handlers to avoid duplicates
+    for h in logger.handlers[:]:
+        logger.removeHandler(h)
+    
+    # Add our handler
+    logger.addHandler(handler)
+    
+    return logger
+
+# Initialize logger with default settings
+logger = setup_logging()
 
 def run_setup_assistant():
     """
@@ -79,8 +107,8 @@ def run_setup_assistant():
         env_vars["MQTT_CLIENT_KEY"] = client_key if client_key else env_vars.get("MQTT_CLIENT_KEY", "")
     
     # Logging Configuration
-    log_level = input(f"Log Level (DEBUG/INFO/WARNING/ERROR/CRITICAL) [{ env_vars.get('LOG_LEVEL', 'INFO') }]: ").strip().upper()
-    valid_log_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+    log_level = input(f"Log Level (NONE/DEBUG/INFO/WARNING/ERROR/CRITICAL) [{ env_vars.get('LOG_LEVEL', 'INFO') }]: ").strip().upper()
+    valid_log_levels = ["NONE", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
     if log_level in valid_log_levels:
         env_vars["LOG_LEVEL"] = log_level
     else:
