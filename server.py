@@ -402,143 +402,183 @@ def execute_command(command_string):
 
 # region COREFLUX TOOLS
 
+class StringModel(BaseModel):
+    value: str
+    @validator('value', pre=True)
+    def ensure_string(cls, v):
+        if not isinstance(v, str):
+            raise ValueError('Value must be a string')
+        return v
+
 @mcp.tool()
 async def add_rule(rule_definition: str, ctx: Context) -> str:
-    """
-    Add a new permission rule to Coreflux
-    
-    Args:
-        rule_definition: The LOT rule definition (DEFINE RULE...)
-    """
-    if not rule_definition or not rule_definition.strip().startswith("DEFINE RULE"):
-        error_msg = "Invalid rule definition format. Must start with 'DEFINE RULE'"
-        logger.error(error_msg)
-        return f"ERROR: {error_msg}"
-        
+    try:
+        StringModel(value=rule_definition)
+    except Exception as e:
+        return f"ERROR: rule_definition must be a string: {e}"
     logger.info(f"Adding rule: {rule_definition[:50]}..." if len(rule_definition) > 50 else f"Adding rule: {rule_definition}")
-    return execute_command(f"-addRule {rule_definition}")
+    result = execute_command(f"-addRule {rule_definition}")
+    try:
+        StringModel(value=result)
+    except Exception as e:
+        return f"ERROR: Output is not a string: {e}"
+    return result
 
 @mcp.tool()
 async def remove_rule(rule_name: str, ctx: Context) -> str:
-    """Remove a permission rule from Coreflux"""
-    if not rule_name or not rule_name.strip():
-        error_msg = "Rule name cannot be empty"
-        logger.error(error_msg)
-        return f"ERROR: {error_msg}"
-        
+    try:
+        StringModel(value=rule_name)
+    except Exception as e:
+        return f"ERROR: rule_name must be a string: {e}"
     logger.info(f"Removing rule: {rule_name}")
-    return execute_command(f"-removeRule {rule_name}")
+    result = execute_command(f"-removeRule {rule_name}")
+    try:
+        StringModel(value=result)
+    except Exception as e:
+        return f"ERROR: Output is not a string: {e}"
+    return result
 
 @mcp.tool()
 async def add_route(ctx: Context) -> str:
     """Add a new route connection"""
     logger.info("Adding new route")
-    return execute_command("-addRoute")
+    result = execute_command("-addRoute")
+    try:
+        StringModel(value=result)
+    except Exception as e:
+        return f"ERROR: Output is not a string: {e}"
+    return result
 
 @mcp.tool()
 async def remove_route(route_id: str, ctx: Context) -> str:
-    """Remove a route connection"""
-    if not route_id or not route_id.strip():
-        error_msg = "Route ID cannot be empty"
-        logger.error(error_msg)
-        return f"ERROR: {error_msg}"
-        
+    try:
+        StringModel(value=route_id)
+    except Exception as e:
+        return f"ERROR: route_id must be a string: {e}"
     logger.info(f"Removing route: {route_id}")
-    return execute_command(f"-removeRoute {route_id}")
+    result = execute_command(f"-removeRoute {route_id}")
+    try:
+        StringModel(value=result)
+    except Exception as e:
+        return f"ERROR: Output is not a string: {e}"
+    return result
 
 @mcp.tool()
 async def add_model(model_definition: str, ctx: Context) -> str:
-    """
-    Add a new model structure to Coreflux
-    
-    Args:
-        model_definition: The LOT model definition (DEFINE MODEL...)
-    """
-    if not model_definition or not model_definition.strip().startswith("DEFINE MODEL"):
-        error_msg = "Invalid model definition format. Must start with 'DEFINE MODEL'"
-        logger.error(error_msg)
-        return f"ERROR: {error_msg}"
-        
+    try:
+        StringModel(value=model_definition)
+    except Exception as e:
+        return f"ERROR: model_definition must be a string: {e}"
     logger.info(f"Adding model: {model_definition[:50]}..." if len(model_definition) > 50 else f"Adding model: {model_definition}")
-    return execute_command(f"-addModel {model_definition}")
+    result = execute_command(f"-addModel {model_definition}")
+    try:
+        StringModel(value=result)
+    except Exception as e:
+        return f"ERROR: Output is not a string: {e}"
+    return result
 
 @mcp.tool()
 async def remove_model(model_name: str, ctx: Context) -> str:
-    """Remove a model structure from Coreflux"""
-    if not model_name or not model_name.strip():
-        error_msg = "Model name cannot be empty"
-        logger.error(error_msg)
-        return f"ERROR: {error_msg}"
-        
+    try:
+        StringModel(value=model_name)
+    except Exception as e:
+        return f"ERROR: model_name must be a string: {e}"
     logger.info(f"Removing model: {model_name}")
-    return execute_command(f"-removeModel {model_name}")
+    result = execute_command(f"-removeModel {model_name}")
+    try:
+        StringModel(value=result)
+    except Exception as e:
+        return f"ERROR: Output is not a string: {e}"
+    return result
 
 @mcp.tool()
 async def add_action(action_definition: str, ctx: Context) -> str:
-    """
-    Add a new action event/function to Coreflux
-    
-    Args:
-        action_definition: The LOT action definition (DEFINE ACTION...)
-    """
-    if not action_definition or not action_definition.strip().startswith("DEFINE ACTION"):
-        error_msg = "Invalid action definition format. Must start with 'DEFINE ACTION'"
-        logger.error(error_msg)
-        return f"ERROR: {error_msg}"
-        
+    try:
+        StringModel(value=action_definition)
+    except Exception as e:
+        return f"ERROR: action_definition must be a string: {e}"
     logger.info(f"Adding action: {action_definition[:50]}..." if len(action_definition) > 50 else f"Adding action: {action_definition}")
-    return execute_command(f"-addAction {action_definition}")
+    result = execute_command(f"-addAction {action_definition}")
+    try:
+        StringModel(value=result)
+    except Exception as e:
+        return f"ERROR: Output is not a string: {e}"
+    return result
 
 @mcp.tool()
 async def remove_action(action_name: str, ctx: Context) -> str:
-    """Remove an action event/function from Coreflux"""
-    if not action_name or not action_name.strip():
-        error_msg = "Action name cannot be empty"
-        logger.error(error_msg)
-        return f"ERROR: {error_msg}"
-        
+    try:
+        StringModel(value=action_name)
+    except Exception as e:
+        return f"ERROR: action_name must be a string: {e}"
     logger.info(f"Removing action: {action_name}")
-    return execute_command(f"-removeAction {action_name}")
+    result = execute_command(f"-removeAction {action_name}")
+    try:
+        StringModel(value=result)
+    except Exception as e:
+        return f"ERROR: Output is not a string: {e}"
+    return result
 
 @mcp.tool()
 async def run_action(action_name: str, ctx: Context) -> str:
-    """Run an action event/function in Coreflux"""
-    if not action_name or not action_name.strip():
-        error_msg = "Action name cannot be empty"
-        logger.error(error_msg)
-        return f"ERROR: {error_msg}"
-        
+    try:
+        StringModel(value=action_name)
+    except Exception as e:
+        return f"ERROR: action_name must be a string: {e}"
     logger.info(f"Running action: {action_name}")
-    return execute_command(f"-runAction {action_name}")
+    result = execute_command(f"-runAction {action_name}")
+    try:
+        StringModel(value=result)
+    except Exception as e:
+        return f"ERROR: Output is not a string: {e}"
+    return result
 
 @mcp.tool()
 async def remove_all_models(ctx: Context) -> str:
     """Remove all models from Coreflux"""
     logger.warning("Removing ALL models - this is a destructive operation")
-    return execute_command("-removeAllModels")
+    result = execute_command("-removeAllModels")
+    try:
+        StringModel(value=result)
+    except Exception as e:
+        return f"ERROR: Output is not a string: {e}"
+    return result
 
 @mcp.tool()
 async def remove_all_actions(ctx: Context) -> str:
     """Remove all actions from Coreflux"""
     logger.warning("Removing ALL actions - this is a destructive operation")
-    return execute_command("-removeAllActions")
+    result = execute_command("-removeAllActions")
+    try:
+        StringModel(value=result)
+    except Exception as e:
+        return f"ERROR: Output is not a string: {e}"
+    return result
 
 @mcp.tool()
 async def remove_all_routes(ctx: Context) -> str:
     """Remove all routes from Coreflux"""
     logger.warning("Removing ALL routes - this is a destructive operation")
-    return execute_command("-removeAllRoutes")
+    result = execute_command("-removeAllRoutes")
+    try:
+        StringModel(value=result)
+    except Exception as e:
+        return f"ERROR: Output is not a string: {e}"
+    return result
 
 @mcp.tool()
 async def lot_diagnostic(diagnostic_value: str, ctx: Context) -> str:
-    """Change the LOT Diagnostic"""
-    if not diagnostic_value or not diagnostic_value.strip():
-        error_msg = "Diagnostic value cannot be empty"
-        logger.error(error_msg)
-        return f"ERROR: {error_msg}"
-        
+    try:
+        StringModel(value=diagnostic_value)
+    except Exception as e:
+        return f"ERROR: diagnostic_value must be a string: {e}"
     logger.info(f"Setting LOT diagnostic to: {diagnostic_value}")
-    return execute_command(f"-lotDiagnostic {diagnostic_value}")
+    result = execute_command(f"-lotDiagnostic {diagnostic_value}")
+    try:
+        StringModel(value=result)
+    except Exception as e:
+        return f"ERROR: Output is not a string: {e}"
+    return result
 
 @mcp.tool()
 async def list_discovered_actions(ctx: Context) -> str:
@@ -553,6 +593,10 @@ async def list_discovered_actions(ctx: Context) -> str:
         tool_status = "✓" if action_name in registered_dynamic_tools else "✗"
         result += f"- {action_name}: {description} [Tool: {tool_status}]\n"
     
+    try:
+        StringModel(value=result)
+    except Exception as e:
+        return f"ERROR: Output is not a string: {e}"
     return result
 
 @mcp.tool()
@@ -567,29 +611,20 @@ async def get_connection_status(ctx: Context) -> str:
         "registered_tools": len(registered_dynamic_tools)
     }
     logger.info(f"Connection status requested: {status}")
-    return json.dumps(status, indent=2)
+    result = json.dumps(status, indent=2)
+    try:
+        StringModel(value=result)
+    except Exception as e:
+        return f"ERROR: Output is not a string: {e}"
+    return result
 
 @mcp.tool()
 def request_lot_code(ctx: Context, query: str, context: str = "") -> str:
-    """
-    Request Lot code generation or Lot Knowledge (models, actions, rules) based on a natural language prompt.
-    So you are able to create models, actions and rules before adding them. Any 
-    logic that you need to implement in the Coreflux MQTT broker you should ask in this tool first.
-    
-    IMPORTANT: Format all JSON properly, going directly on the first try to simple quoted strings. This is fundamental for the success of the execution!
-
-    Args:
-        query: describe what the user wants in a structured way
-        context: Additional context or specific requirements (optional)
-    
-    Returns:
-        str: The reply with documentation and LOT code with the potential actions, models, rules or routes.
-    """
-    if not query or not query.strip():
-        error_msg = "Query cannot be empty"
-        logger.error(error_msg)
-        return f"ERROR: {error_msg}"
-        
+    try:
+        StringModel(value=query)
+        StringModel(value=context)
+    except Exception as e:
+        return f"ERROR: query/context must be a string: {e}"
     api_url = "https://anselmo.coreflux.org/webhook/chat_lot_beta"
     
     # Improved sanitization for JSON safety
@@ -650,7 +685,12 @@ def request_lot_code(ctx: Context, query: str, context: str = "") -> str:
         
         if response.status_code == 200:
             # Process the response with enhanced error handling
-            return process_lot_code_response(response.text)
+            result = process_lot_code_response(response.text)
+            try:
+                StringModel(value=result)
+            except Exception as e:
+                return f"ERROR: Output is not a string: {e}"
+            return result
         else:
             error_msg = f"API request failed with status {response.status_code}"
             logger.error(error_msg)
@@ -705,7 +745,12 @@ def process_lot_code_response(response_text):
         logger.info(f"LOT code generation successful")
         
         # Format the response for output
-        return format_lot_code_output(result)
+        formatted_result = format_lot_code_output(result)
+        try:
+            StringModel(value=formatted_result)
+        except Exception as e:
+            return f"ERROR: Output is not a string: {e}"
+        return formatted_result
         
     except json.JSONDecodeError as e:
         # Log the detailed error
